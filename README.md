@@ -1,166 +1,102 @@
-# ufla-devops-shop
+# ufla-devops-shop — Pipeline DevSecOps
 
-Repositório da turma de **DevOps na Prática** — DCC / UFLA.
+Pipeline CI/CD com GitHub Actions (`.github/workflows/ci.yml`) com segurança integrada desde o início (*shift-left security*). Todas as verificações rodam automaticamente na abertura e atualização de Pull Requests para a `main` e em push na `main`. A imagem Docker só é publicada no GHCR depois que todos os gates passam.
 
-Prof. Dr. Rafael Serapilha Durelli · [rafael.durelli@ufla.br](mailto:rafael.durelli@ufla.br)
-
-Este repositório é o **projeto fio condutor** da disciplina. Você faz um *fork*
-dele na Atividade 0 e trabalha no seu fork durante as 15 semanas: a mesma
-aplicação vai sendo containerizada, testada, empacotada, implantada, monitorada
-e provisionada, semana após semana.
-
----
-
-## Comece por aqui
-
-1. Instale as ferramentas: **[docs/instalacao.md](docs/instalacao.md)**
-   (Ubuntu/Debian, Fedora, macOS e Windows com WSL2).
-2. Faça o *fork* deste repositório (botão **Fork**, canto superior direito).
-3. Clone o **seu** fork e verifique a máquina:
-
-   ```bash
-   git clone git@github.com:<seu-usuario>/ufla-devops-shop.git
-   cd ufla-devops-shop
-   ./scripts/check-ambiente.sh
-   ```
-
-4. Siga o enunciado da **Atividade 0**, publicado no campus virtual.
-
----
-
-## Estrutura
-
-```
-ufla-devops-shop/
-├── app/                       # a API (FastAPI): uvicorn app:api
-├── static/                    # o front estático, servido pela API em /
-├── tests/                     # pytest — roda sem banco nem cache
-├── requirements.txt           # dependências de execução (vão para a imagem)
-├── requirements-dev.txt       # + testes, cobertura e lint (CI e desenvolvimento)
-├── pyproject.toml             # configuração de ruff, pytest e cobertura
-├── docs/
-│   ├── instalacao.md          # roteiro de instalação por sistema operacional
-│   └── aplicacao.md           # como a aplicação funciona, rotas e variáveis
-├── scripts/
-│   ├── check-ambiente.sh      # verificador de ambiente (Atividade 0)
-│   └── baixar-dados.sh        # traz o access.log da Atividade 2
-├── alunos/                    # apresentação de cada aluno (Atividade 0)
-├── analises/                  # análises da Atividade 1 e (em logs/) da Atividade 2
-└── .github/
-    ├── pull_request_template.md
-    └── workflows/             # verificação automática de cada atividade
+```mermaid
+flowchart LR
+  A[PR / push] --> L[Lint]
+  A --> T[Testes]
+  A --> G[Gitleaks]
+  L --> B[Build da imagem Docker]
+  T --> B
+  T --> S[SonarCloud]
+  B --> V[Trivy]
+  B --> Y[SBOM Syft]
+  B --> P[Publicar no GHCR - só push na main]
+  G --> P
+  S --> P
+  V --> P
+  Y --> P
 ```
 
-## A aplicação
+## Jobs do pipeline
 
-`ufla-devops-shop` é uma loja mínima: API em Python (FastAPI), PostgreSQL,
-Redis e um front estático. Ela é o **fio condutor** das 15 semanas — cada
-atividade acrescenta uma camada sobre a mesma base, e nenhuma começa do zero.
+| Job | Função |
+|---|---|
+| Lint | Ruff (`ruff check .`) |
+| Testes | pytest com cobertura (`coverage.xml` enviado ao SonarCloud) |
+| Build da imagem Docker | Constrói a imagem uma única vez e a guarda como artifact (`docker-image`) |
+| Gitleaks | Detecção de segredos |
+| SonarCloud | Análise estática (SAST) e Quality Gate |
+| Trivy | Vulnerabilidades em dependências e na imagem |
+| SBOM (Syft) | Software Bill of Materials da imagem |
+| Publicar no GHCR | Publica a mesma imagem escaneada, somente em push na `main` ou tags `v*` |
 
-```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements-dev.txt
-uvicorn app:api --reload        # http://localhost:8000  (API + front + /docs)
-pytest --cov=app                # os testes não precisam de banco nem de cache
-```
+## Ferramentas e regras de bloqueio
 
-Sem variáveis de ambiente ela sobe **sozinha** (SQLite + cache em memória).
-Com `DATABASE_URL` e `REDIS_URL` ela usa PostgreSQL e Redis. Rotas, variáveis,
-modos e os tamanhos reais de imagem estão em
-**[docs/aplicacao.md](docs/aplicacao.md)** — leia antes da Atividade 4.
+| Ferramenta | O que verifica | Regra de bloqueio |
+|---|---|---|
+| **Gitleaks** | Senhas, tokens, chaves e outros segredos no histórico do repositório (`fetch-depth: 0`) | Falha com qualquer vazamento detectado. Sem allowlist (`.gitleaks.toml` usa apenas as regras padrão). |
+| **SonarCloud** | Bugs, vulnerabilidades, code smells, hotspots de segurança e cobertura | Falha quando o Quality Gate reprova o **código novo** (*Clean as You Code*), via `sonar.qualitygate.wait=true`. |
+| **Trivy** | Dependências (`requirements.txt` e `requirements-dev.txt`) e a imagem Docker construída | **Bloqueia** CRITICAL e HIGH com correção disponível (`ignore-unfixed: true`, `exit-code: 1`). LOW e MEDIUM são apenas registrados em relatório (`exit-code: 0`). Todos os relatórios são publicados no artifact `relatorios-trivy`, inclusive quando o job falha. |
+| **Syft** | Componentes e versões da imagem Docker | Gera `sbom-imagem.spdx.json` (SPDX JSON), publicado como artifact `sbom-imagem`. |
 
-### Seu fork está desatualizado?
+O job **Publicar no GHCR** usa `needs` em todos os gates (Build, Gitleaks, SonarCloud, Trivy e SBOM) e exige sucesso de cada um. Ele nunca roda em Pull Request, então uma versão vulnerável nunca é publicada.
 
-Quem fez o *fork* antes de a aplicação entrar aqui precisa **trazê-la**:
-`git pull` puxa do seu fork, não deste repositório.
+## Proteção da branch `main`
 
-```bash
-git remote add upstream https://github.com/rdurelli/ufla-devops-shop.git   # uma vez só
-git fetch upstream && git switch main && git merge upstream/main && git push origin main
-```
+- Pull Request obrigatório antes do merge.
+- 8 status checks obrigatórios: Gitleaks, Lint, Testes, Build da imagem Docker, Trivy, SBOM (Syft), SonarCloud e SonarCloud Code Analysis.
+- Branch precisa estar atualizada com a `main`.
+- Sem bypass, inclusive para administradores. Force push e exclusão da branch desabilitados.
 
-Ou **Sync fork → Update branch** na página do seu fork. Faça isso no início de
-**toda** atividade.
+![Regra da main](docs/evidencias/protecao-branch-lista.png)
 
-## `scripts/check-ambiente.sh`
+![PR e status checks obrigatórios](docs/evidencias/protecao-branch-regras.png)
 
-Verifica ferramentas, versões mínimas, o daemon do Docker, a configuração do Git
-e os recursos da máquina. Quando algo falta, imprime o comando de instalação
-para o sistema detectado.
+![Checks obrigatórios e sem bypass](docs/evidencias/protecao-branch-checks.png)
 
-```bash
-./scripts/check-ambiente.sh                      # relatório colorido
-./scripts/check-ambiente.sh | tee ambiente.txt   # salva para anexar ao PR
-```
+## Evidências
 
-Sai com código `0` se o ambiente estiver pronto e `1` se faltar algo
-obrigatório. Versões mínimas: `git` 2.30, `docker` 24.0, `kubectl` 1.28,
-`kind` 0.20, `helm` 3.12, `terraform` 1.5, Docker Compose v2.
+### Pipeline completo na `main`
+No push da `main` (merge do PR #1), todos os jobs passaram e o **Publicar no GHCR** rodou somente depois de Build, Gitleaks, SonarCloud, Trivy e SBOM (ver aba *Actions*, workflow **CI**, branch `main`).
 
-O script também é material didático: na Semana 4 (shell script) abrimos este
-arquivo em aula e discutimos as construções usadas nele.
+### Gitleaks bloqueando o PR #1
+Durante a configuração, o Gitleaks bloqueou o PR #1 ao detectar um valor com formato de chave (`generic-api-key`) em `sonar-project.properties`. A correção foi remover a chave literal do arquivo, sem criar allowlist:
 
----
+![Gitleaks bloqueando](docs/evidencias/gitleaks-bloqueio.png)
 
-## Como entregar
+### Demonstração do bloqueio e da correção (PR #2)
 
-Toda atividade tem **duas etapas obrigatórias**. Faltando qualquer uma delas, a
-atividade é considerada não entregue.
+Na branch `teste/dependencia-vulneravel` foi introduzida intencionalmente a dependência `cryptography==41.0.7`, com vulnerabilidades HIGH conhecidas e com correção disponível:
 
-1. **Pull Request neste repositório**, com o trabalho feito na *branch*
-   `atividade-NN` do seu fork.
-2. **Link do Pull Request postado no campus virtual**, na tarefa correspondente.
-   O horário desta postagem é o registro oficial da entrega.
+| Vulnerabilidade | Severidade | Corrigida em |
+|---|---|---|
+| CVE-2023-50782 | HIGH | 42.0.0 |
+| CVE-2024-26130 | HIGH | 42.0.4 |
+| CVE-2026-26007 | HIGH | 46.0.5 |
+| GHSA-537c-gmf6-5ccf | HIGH | 48.0.1 |
 
-O fluxo é sempre o mesmo:
+O Trivy falhou, os demais checks passaram e o merge foi bloqueado pela proteção da branch:
 
-```bash
-git switch -c atividade-00                       # branch da atividade
-git add alunos/<seu-usuario>.md ambiente.txt     # seus arquivos
-git commit -m "feat: apresentacao e ambiente de <seu-usuario>"
-git push -u origin atividade-00
-```
+![PR bloqueado](docs/evidencias/pr-bloqueado.png)
 
-Depois abra o Pull Request pelo GitHub, com o título no padrão
-`Atividade 0 -- Seu Nome`.
+Job do Trivy falhando nos scans bloqueantes (o relatório completo está no step *Exibir relatório filesystem bloqueante* e no artifact `relatorios-trivy`):
 
-### Verificação automática
+![Trivy falhando nos scans bloqueantes](docs/evidencias/trivy-falha.png)
 
-Assim que o PR é aberto, o GitHub Actions roda sozinho e comenta o resultado em
-cerca de um minuto. Se aparecer ✗ vermelho, leia o comentário, corrija, faça um
-novo commit e dê `push` na mesma branch — o PR se atualiza sozinho. Você pode
-repetir isso quantas vezes quiser antes do prazo.
+Em seguida a dependência vulnerável foi corrigida na mesma branch, e a nova execução do PR #2 foi aprovada.
 
-A verificação automática **não é a nota**. Ela cobre o que a máquina consegue
-julgar; a avaliação do professor complementa nos aspectos que ela não julga —
-clareza, justificativa das decisões e qualidade da documentação.
+A versão vulnerável não foi mergeada nem publicada.
 
-### Atrasos e descarte
+### SBOM
 
-Atraso: desconto de 1,0 ponto por dia corrido, contado pelo horário da postagem
-no campus virtual. Descarte: a menor nota entre as atividades do semestre é
-descartada no cálculo final, sem necessidade de justificativa.
+O SBOM é gerado em todo run e fica disponível em **Actions → run → Summary → Artifacts → `sbom-imagem`** (arquivo `sbom-imagem.spdx.json`).
 
----
+## Configuração necessária
 
-## Onde pedir ajuda
+| Secret | Descrição |
+|---|---|
+| `SONAR_TOKEN` | Token do SonarCloud (*My Account → Security*), cadastrado em *Settings → Secrets and variables → Actions*. |
 
-No **fórum da atividade**, no campus virtual. Pergunta pública gera resposta que
-serve para a turma toda — e quase sempre alguém já passou pelo mesmo problema.
-
-Ao relatar um erro, inclua:
-
-1. o que você estava tentando fazer;
-2. o comando exato que executou;
-3. a mensagem de erro **completa**, copiada como texto (não como foto da tela);
-4. o que você já tentou.
-
-Esta é a mesma estrutura de um bom *issue* e de um bom *postmortem*.
-
----
-
-## Uso de IA generativa
-
-Permitido e incentivado. Em contrapartida, você deve ser capaz de explicar
-qualquer linha entregue: a arguição final pergunta o *porquê* das decisões, não
-a sintaxe.
+No SonarCloud, o projeto usa análise via GitHub Actions (Automatic Analysis desligado). A organização e a project key são passadas pelo workflow a partir do dono e do nome do repositório.
