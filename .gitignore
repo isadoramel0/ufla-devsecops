@@ -1,0 +1,56 @@
+# Sistema operacional
+.DS_Store
+Thumbs.db
+
+# Editores
+.vscode/
+.idea/
+*.swp
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+
+# Banco SQLite do modo autonomo (dados locais, nunca versionar)
+*.db
+*.db-journal
+
+# Node
+node_modules/
+
+# Segredos --- NUNCA versione nada disto
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets.yaml
+secrets.yml
+
+# Terraform (Semana 14)
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+crash.log
+
+# Kubernetes / Helm
+kubeconfig
+*.kubeconfig
+
+# ATENCAO: o ambiente.txt da Atividade 0 DEVE ser versionado.
+# Nao adicione "*.txt" aqui.
+
+# Dados da Atividade 2 -- 87 MB de access.log. NAO versione.
+# Traga o arquivo com ./scripts/baixar-dados.sh
+dados/
+
+# Configuracoes locais que podem conter credenciais.
+etc/
